@@ -25,7 +25,8 @@ const (
 	OpcodeLoginByToken     = 19
 	OpcodeSetSettings      = 22
 	OpcodeResolveUsers     = 32
-	OpcodeAddContact       = 34
+	OpcodeAddContact        = 34
+	OpcodeAddContactByPhone = 41
 	OpcodeResolveChannel   = 48
 	OpcodeGetHistory       = 49
 	OpcodePinMessage       = 55
