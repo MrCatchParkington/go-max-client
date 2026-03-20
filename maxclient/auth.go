@@ -89,6 +89,18 @@ func (c *Client) AuthToken(ctx context.Context, token, deviceID string) error {
 		}
 	}
 
+	// Extract own user ID from profile
+	if raw, ok := payload["profile"]; ok {
+		var profileData struct {
+			Contact struct {
+				ID int64 `json:"id"`
+			} `json:"contact"`
+		}
+		if json.Unmarshal(raw, &profileData) == nil {
+			c.ownUserID = profileData.Contact.ID
+		}
+	}
+
 	c.token = token
 	c.log.Info("authenticated by token")
 
@@ -204,8 +216,24 @@ func (c *Client) WaitQRAuth(ctx context.Context) (*QRAuth, error) {
 	// After QR exchange, call loginByToken to fully initialize the session
 	// with chat subscriptions. Without this, the server closes the connection
 	// after the first message.
-	if _, err := c.InvokeMethod(ctx, OpcodeLoginByToken, buildLoginPayload(token)); err != nil {
+	lbtResp, err := c.InvokeMethod(ctx, OpcodeLoginByToken, buildLoginPayload(token))
+	if err != nil {
 		return nil, fmt.Errorf("login_by_token after QR: %w", err)
+	}
+
+	// Extract own user ID from profile
+	var lbtPayload map[string]json.RawMessage
+	if json.Unmarshal(lbtResp.Payload, &lbtPayload) == nil {
+		if raw, ok := lbtPayload["profile"]; ok {
+			var profileData struct {
+				Contact struct {
+					ID int64 `json:"id"`
+				} `json:"contact"`
+			}
+			if json.Unmarshal(raw, &profileData) == nil {
+				c.ownUserID = profileData.Contact.ID
+			}
+		}
 	}
 
 	// Resolve Favorites chat ID (single-participant DIALOG chat)
