@@ -66,15 +66,19 @@ func TestAddContactByPhone(t *testing.T) {
 }
 
 func TestFindUserByPhone(t *testing.T) {
+	const resolveResponse = `{"chats":[{"id":90001,"participants":{"55501":1,"100002":1}}]}`
+
 	var payload map[string]any
 	srv, wsURL := mockWSServer(map[int]mockHandler{
 		OpcodeAddContactByPhone: func(ctx context.Context, conn *websocket.Conn, pkt Packet) error {
 			json.Unmarshal(pkt.Payload, &payload)
 			return respondOK(addContactResponse)(ctx, conn, pkt)
 		},
+		OpcodeResolveChannel: respondOK(resolveResponse),
 	})
 	defer srv.Close()
 	c := New(withWSURL(wsURL))
+	c.ownUserID = 100002
 	ctx := context.Background()
 	c.Connect(ctx)
 	defer c.Close()
@@ -89,8 +93,9 @@ func TestFindUserByPhone(t *testing.T) {
 		t.Errorf("firstName = %v, want _ (placeholder)", payload["firstName"])
 	}
 
-	if user.ID != 90001 {
-		t.Errorf("ID = %d, want 90001", user.ID)
+	// user.ID should be the real userId (55501), not the contact record ID (90001)
+	if user.ID != 55501 {
+		t.Errorf("ID = %d, want 55501 (real userId from participants)", user.ID)
 	}
 }
 

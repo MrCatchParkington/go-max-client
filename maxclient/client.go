@@ -74,6 +74,9 @@ type Client struct {
 	token    string
 	deviceID string
 
+	// own profile ID (extracted from login response)
+	ownUserID int64
+
 	// channels
 	packets chan *Packet
 	errors  chan error

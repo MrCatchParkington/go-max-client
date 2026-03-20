@@ -16,10 +16,41 @@ func (c *Client) AddContactByPhone(ctx context.Context, phone, firstName string)
 }
 
 // FindUserByPhone looks up a user by phone number.
-// Calls opcode 41 with a placeholder name. Returns the user's info including their ID,
-// which can be used directly as a chatID for SendMessage.
+// Calls AddContactByPhone, then resolves the real userId from chat participants,
+// because contact.id is a contact record ID, not the user's real ID.
 func (c *Client) FindUserByPhone(ctx context.Context, phone string) (*User, error) {
-	return c.addContactByPhone(ctx, phone, "_")
+	user, err := c.addContactByPhone(ctx, phone, "_")
+	if err != nil {
+		return nil, err
+	}
+	contactID := user.ID
+
+	// Resolve the real userId from chat participants.
+	resp, err := c.ResolveChannel(ctx, contactID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve contact chat: %w", err)
+	}
+
+	var resolved struct {
+		Chats []struct {
+			Participants map[string]any `json:"participants"`
+		} `json:"chats"`
+	}
+	if err := json.Unmarshal(resp.Payload, &resolved); err == nil {
+		ownID := strconv.FormatInt(c.ownUserID, 10)
+		for _, chat := range resolved.Chats {
+			for pidStr := range chat.Participants {
+				if pidStr != ownID {
+					if realID, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+						user.ID = realID
+						return user, nil
+					}
+				}
+			}
+		}
+	}
+
+	return user, nil
 }
 
 func (c *Client) addContactByPhone(ctx context.Context, phone, firstName string) (*User, error) {
