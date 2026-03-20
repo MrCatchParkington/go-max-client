@@ -20,6 +20,7 @@ type Message struct {
 	ChatID int64  `json:"chatId,omitempty"`
 	Text   string `json:"text"`
 	Status string `json:"status,omitempty"`
+	Sender int64  `json:"sender,omitempty"`
 }
 
 // MessageEvent is the payload of opcode 128 packets.

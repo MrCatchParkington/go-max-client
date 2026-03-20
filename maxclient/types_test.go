@@ -60,3 +60,19 @@ func TestParseMessageEventWrongOpcode(t *testing.T) {
 		t.Fatal("expected error for wrong opcode")
 	}
 }
+
+func TestParseMessageEventSender(t *testing.T) {
+	raw := `{"chatId":90001,"message":{"sender":90002,"id":"msg-1","text":"hello","type":"USER"}}`
+	pkt := Packet{Opcode: OpcodeMessageEvent, Payload: json.RawMessage(raw)}
+
+	evt, err := ParseMessageEvent(&pkt)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if evt.Message.Sender != 90002 {
+		t.Errorf("Sender = %d, want 90002", evt.Message.Sender)
+	}
+	if evt.ChatID != 90001 {
+		t.Errorf("ChatID = %d, want 90001", evt.ChatID)
+	}
+}
