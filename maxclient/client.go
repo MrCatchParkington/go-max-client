@@ -40,8 +40,17 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // WithPacketBufferSize sets the buffer size for the Packets channel.
+// Panics if n < 0.
 func WithPacketBufferSize(n int) Option {
+	if n < 0 {
+		panic("maxclient: packet buffer size must be non-negative")
+	}
 	return func(c *Client) { c.packetBufSize = n }
+}
+
+// WithHTTPClient sets a custom HTTP client for file uploads.
+func WithHTTPClient(hc *http.Client) Option {
+	return func(c *Client) { c.httpClient = hc }
 }
 
 // withWSURL overrides the WebSocket URL (for testing).
@@ -60,6 +69,7 @@ type Client struct {
 	reconnectMin      time.Duration
 	reconnectMax      time.Duration
 	keepaliveInterval time.Duration
+	httpClient        *http.Client
 
 	// state
 	conn    *websocket.Conn
@@ -67,8 +77,8 @@ type Client struct {
 	pending sync.Map // seq -> chan *Packet
 
 	// upload completion pending maps
-	videoPending sync.Map // videoId (string) -> chan struct{}
-	filePending  sync.Map // fileId (string) -> chan struct{}
+	videoPending sync.Map // videoId (string) -> chan error
+	filePending  sync.Map // fileId (string) -> chan error
 
 	// auth state (saved for reconnect)
 	token    string
@@ -78,8 +88,9 @@ type Client struct {
 	ownUserID int64
 
 	// channels
-	packets chan *Packet
-	errors  chan error
+	packets      chan *Packet
+	callIncoming chan *Packet // incoming call notifications (opcode 137)
+	errors       chan error
 
 	// lifecycle
 	lifecycleCtx    context.Context
@@ -97,7 +108,7 @@ type Client struct {
 	qrExpiresAt    int64
 
 	// reconnect
-	reconnecting     sync.RWMutex
+	reconnectCh      chan struct{} // closed when not reconnecting; replaced with blocked chan during reconnect
 	reconnectRunning atomic.Bool
 }
 
@@ -110,13 +121,19 @@ func New(opts ...Option) *Client {
 		packetBufSize: 1024,
 		reconnectMin:  time.Second,
 		reconnectMax:  30 * time.Second,
+		httpClient:    &http.Client{Timeout: 5 * time.Minute},
 	}
 	for _, o := range opts {
 		o(c)
 	}
 	c.lifecycleCtx, c.lifecycleCancel = context.WithCancel(context.Background())
 	c.packets = make(chan *Packet, c.packetBufSize)
+	c.callIncoming = make(chan *Packet, 1)
 	c.errors = make(chan error, 8)
+	// Initially not reconnecting — closed channel means "ready"
+	ch := make(chan struct{})
+	close(ch)
+	c.reconnectCh = ch
 	return c
 }
 
@@ -125,7 +142,8 @@ func (c *Client) Packets() <-chan *Packet {
 	return c.packets
 }
 
-// Errors returns a channel of connection errors.
+// Errors returns a channel of connection errors and status notifications.
+// Status notifications include ErrReconnecting and ErrReconnected.
 func (c *Client) Errors() <-chan error {
 	return c.errors
 }
@@ -164,18 +182,23 @@ func (c *Client) Connect(ctx context.Context) error {
 // Close gracefully shuts down the client. This is terminal — the client cannot be reused after Close.
 func (c *Client) Close() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	// Cancel lifecycle context — terminates keepalive, reconnect, and all background goroutines
 	c.lifecycleCancel()
 
 	if c.conn == nil {
+		c.mu.Unlock()
 		return nil
 	}
 
 	c.cancel()
-	c.conn.Close(websocket.StatusNormalClosure, "")
-	<-c.done
+	conn := c.conn
+	done := c.done
+	c.mu.Unlock()
+
+	// Wait for recvLoop to finish OUTSIDE the lock to avoid deadlock
+	// (recvLoop's autoReconnect path needs c.mu)
+	conn.Close(websocket.StatusNormalClosure, "")
+	<-done
 
 	// Drain all pending requests with ErrDisconnected
 	c.pending.Range(func(key, value any) bool {
@@ -187,8 +210,12 @@ func (c *Client) Close() error {
 		c.pending.Delete(key)
 		return true
 	})
+	c.drainUploadWaiters()
 
+	c.mu.Lock()
 	c.conn = nil
+	c.mu.Unlock()
+
 	c.log.Info("disconnected")
 	return nil
 }
@@ -196,16 +223,24 @@ func (c *Client) Close() error {
 // InvokeMethod sends a request and waits for the matching response.
 // If auto-reconnect is in progress, blocks until reconnection completes (respecting ctx).
 func (c *Client) InvokeMethod(ctx context.Context, opcode int, payload any) (*Packet, error) {
-	// Block if reconnecting — reconnecting.Lock() is held during reconnect,
-	// RLock() will block until reconnect completes
-	c.reconnecting.RLock()
-	defer c.reconnecting.RUnlock()
+	// Copy channel ref under lock to avoid data race with reconnectLoop
+	c.mu.Lock()
+	reconnectCh := c.reconnectCh
+	c.mu.Unlock()
+
+	// Wait for reconnect to complete (if in progress), respecting caller's context
+	select {
+	case <-reconnectCh:
+		// not reconnecting (or reconnect finished)
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	return c.invokeInternal(ctx, opcode, payload)
 }
 
-// invokeInternal is the core of InvokeMethod without the reconnecting RLock.
-// Used by reconnectLoop (which already holds the write lock) to avoid deadlock.
+// invokeInternal is the core of InvokeMethod without waiting on reconnectCh.
+// Used by reconnectLoop (which has set reconnectCh to blocked) to avoid self-blocking.
 func (c *Client) invokeInternal(ctx context.Context, opcode int, payload any) (*Packet, error) {
 	c.mu.Lock()
 	conn := c.conn
@@ -238,6 +273,26 @@ func (c *Client) invokeInternal(ctx context.Context, opcode int, payload any) (*
 	}
 }
 
+// drainUploadWaiters signals all pending upload waiters with ErrDisconnected.
+func (c *Client) drainUploadWaiters() {
+	c.videoPending.Range(func(key, value any) bool {
+		select {
+		case value.(chan error) <- ErrDisconnected:
+		default:
+		}
+		c.videoPending.Delete(key)
+		return true
+	})
+	c.filePending.Range(func(key, value any) bool {
+		select {
+		case value.(chan error) <- ErrDisconnected:
+		default:
+		}
+		c.filePending.Delete(key)
+		return true
+	})
+}
+
 // recvLoop reads packets from the WebSocket and dispatches them.
 func (c *Client) recvLoop(ctx context.Context) {
 	defer close(c.done)
@@ -250,7 +305,7 @@ func (c *Client) recvLoop(ctx context.Context) {
 			}
 			c.log.Warn("read error", "err", err)
 
-			// Drain all pending requests with ErrDisconnected before triggering reconnect
+			// Drain all pending requests and upload waiters before triggering reconnect
 			c.pending.Range(func(key, value any) bool {
 				ch := value.(chan *Packet)
 				select {
@@ -260,6 +315,7 @@ func (c *Client) recvLoop(ctx context.Context) {
 				c.pending.Delete(key)
 				return true
 			})
+			c.drainUploadWaiters()
 
 			select {
 			case c.errors <- ErrDisconnected:
@@ -267,10 +323,14 @@ func (c *Client) recvLoop(ctx context.Context) {
 			}
 
 			if c.autoReconnect && c.token != "" {
+				// Set reconnect state synchronously BEFORE spawning goroutine
+				// to prevent race where InvokeMethod sees stale unblocked reconnectCh
+				reconnectDone := make(chan struct{})
 				c.mu.Lock()
 				c.conn = nil
+				c.reconnectCh = reconnectDone
 				c.mu.Unlock()
-				go c.reconnectLoop()
+				go c.reconnectLoop(reconnectDone)
 			}
 			return
 		}
@@ -281,12 +341,14 @@ func (c *Client) recvLoop(ctx context.Context) {
 			continue
 		}
 
-		// Check if this is a response to a pending request (seq > 0 to skip unsolicited events)
+		// Check if this is a response to a pending request
 		if pkt.Seq > 0 {
 			if ch, ok := c.pending.LoadAndDelete(pkt.Seq); ok {
 				ch.(chan *Packet) <- &pkt
 				continue
 			}
+			// Not a pending response — fall through to deliver as push notification.
+			// Push notifications from MAX (message events, etc.) can have Seq > 0.
 		}
 
 		// Check for upload completion (opcode 136)
@@ -296,17 +358,27 @@ func (c *Client) recvLoop(ctx context.Context) {
 				if videoID, ok := payload["videoId"]; ok {
 					if id := unmarshalStringOrNumber(videoID); id != "" {
 						if ch, ok := c.videoPending.LoadAndDelete(id); ok {
-							close(ch.(chan struct{}))
+							ch.(chan error) <- nil // success
 						}
 					}
 				}
 				if fileID, ok := payload["fileId"]; ok {
 					if id := unmarshalStringOrNumber(fileID); id != "" {
 						if ch, ok := c.filePending.LoadAndDelete(id); ok {
-							close(ch.(chan struct{}))
+							ch.(chan error) <- nil // success
 						}
 					}
 				}
+			}
+		}
+
+		// Route incoming call notifications to dedicated channel
+		if pkt.Opcode == OpcodeIncomingCall {
+			select {
+			case c.callIncoming <- &pkt:
+				continue
+			default:
+				// nobody waiting for calls, deliver to general packets below
 			}
 		}
 

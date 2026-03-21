@@ -1,22 +1,16 @@
 package maxclient
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
-	"time"
 )
 
-var httpClient = &http.Client{
-	Timeout: 5 * time.Minute,
-}
-
 // UploadPhoto uploads a photo and returns an Attachment for use in SendMessage.
-func (c *Client) UploadPhoto(ctx context.Context, chatID int64, filename string, data io.Reader) (*Attachment, error) {
+func (c *Client) UploadPhoto(ctx context.Context, filename string, data io.Reader) (*Attachment, error) {
 	// Get upload URL first (server expects this order)
 	resp, err := c.InvokeMethod(ctx, OpcodePhotoUploadURL, map[string]any{"count": 1})
 	if err != nil {
@@ -59,7 +53,7 @@ func (c *Client) UploadPhoto(ctx context.Context, chatID int64, filename string,
 }
 
 // UploadVideo uploads a video and waits for server-side processing completion (opcode 136).
-func (c *Client) UploadVideo(ctx context.Context, chatID int64, filename string, data io.Reader) (*Attachment, error) {
+func (c *Client) UploadVideo(ctx context.Context, filename string, data io.Reader) (*Attachment, error) {
 	// Get upload URL first (server expects this order)
 	resp, err := c.InvokeMethod(ctx, OpcodeVideoUploadURL, map[string]any{"count": 1})
 	if err != nil {
@@ -84,7 +78,7 @@ func (c *Client) UploadVideo(ctx context.Context, chatID int64, filename string,
 	videoID := info.VideoID.String()
 
 	// Register pending completion before upload
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	c.videoPending.Store(videoID, done)
 	defer c.videoPending.Delete(videoID)
 
@@ -95,9 +89,12 @@ func (c *Client) UploadVideo(ctx context.Context, chatID int64, filename string,
 	}
 	httpResp.Body.Close()
 
-	// Wait for opcode 136 completion
+	// Wait for opcode 136 completion or disconnect
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			return nil, fmt.Errorf("upload video: %w", err)
+		}
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -106,7 +103,7 @@ func (c *Client) UploadVideo(ctx context.Context, chatID int64, filename string,
 }
 
 // UploadFile uploads a file and waits for server-side processing completion (opcode 136).
-func (c *Client) UploadFile(ctx context.Context, chatID int64, filename string, data io.Reader) (*Attachment, error) {
+func (c *Client) UploadFile(ctx context.Context, filename string, data io.Reader) (*Attachment, error) {
 	// Get upload URL first (server expects this order)
 	resp, err := c.InvokeMethod(ctx, OpcodeFileUploadURL, map[string]any{"count": 1})
 	if err != nil {
@@ -130,7 +127,7 @@ func (c *Client) UploadFile(ctx context.Context, chatID int64, filename string, 
 	fileID := info.FileID.String()
 
 	// Register pending completion before upload
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	c.filePending.Store(fileID, done)
 	defer c.filePending.Delete(fileID)
 
@@ -141,9 +138,12 @@ func (c *Client) UploadFile(ctx context.Context, chatID int64, filename string, 
 	}
 	httpResp.Body.Close()
 
-	// Wait for opcode 136 completion
+	// Wait for opcode 136 completion or disconnect
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			return nil, fmt.Errorf("upload file: %w", err)
+		}
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -153,19 +153,25 @@ func (c *Client) UploadFile(ctx context.Context, chatID int64, filename string, 
 
 // uploadHTTP performs a multipart file upload to the given URL.
 func (c *Client) uploadHTTP(ctx context.Context, url, filename string, data io.Reader) (*http.Response, error) {
-	var buf bytes.Buffer
-	w := multipart.NewWriter(&buf)
-	part, err := w.CreateFormFile("file", filename)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := io.Copy(part, data); err != nil {
-		return nil, err
-	}
-	w.Close()
+	pr, pw := io.Pipe()
+	w := multipart.NewWriter(pw)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
+	go func() {
+		part, err := w.CreateFormFile("file", filename)
+		if err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		if _, err := io.Copy(part, data); err != nil {
+			pw.CloseWithError(err)
+			return
+		}
+		pw.CloseWithError(w.Close())
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, pr)
 	if err != nil {
+		pr.Close()
 		return nil, err
 	}
 	req.Header.Set("Content-Type", w.FormDataContentType())
@@ -173,7 +179,7 @@ func (c *Client) uploadHTTP(ctx context.Context, url, filename string, data io.R
 	req.Header.Set("Referer", DefaultOrigin+"/")
 	req.Header.Set("User-Agent", c.userAgent)
 
-	resp, err := httpClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

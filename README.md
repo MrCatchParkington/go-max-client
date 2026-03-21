@@ -12,6 +12,7 @@
 - Работа с каналами: информация, поиск по ссылке
 - Получение профилей пользователей
 - Изменение профиля и настроек
+- Звонки: инициирование, приём, двусторонний поток данных через ICE
 - Автоматический реконнект с экспоненциальным backoff
 - Keepalive для поддержания соединения
 
@@ -97,7 +98,7 @@ if err != nil {
 }
 defer file.Close()
 
-attach, err := client.UploadPhoto(ctx, chatID, "photo.jpg", file)
+attach, err := client.UploadPhoto(ctx, "photo.jpg", file)
 if err != nil {
 	log.Fatal(err)
 }
@@ -143,6 +144,7 @@ for pkt := range client.Packets() {
 | `WithUserAgent(string)` | Пользовательский User-Agent |
 | `WithLogger(*slog.Logger)` | Логгер |
 | `WithPacketBufferSize(int)` | Размер буфера канала пакетов |
+| `WithHTTPClient(*http.Client)` | HTTP-клиент для загрузки файлов и Calls API |
 
 ### Аутентификация
 
@@ -166,9 +168,9 @@ for pkt := range client.Packets() {
 
 | Метод | Описание |
 |-------|----------|
-| `UploadPhoto(ctx, chatID, filename, reader)` | Загрузка фото |
-| `UploadVideo(ctx, chatID, filename, reader)` | Загрузка видео (ожидает обработку на сервере) |
-| `UploadFile(ctx, chatID, filename, reader)` | Загрузка файла (ожидает обработку на сервере) |
+| `UploadPhoto(ctx, filename, reader)` | Загрузка фото |
+| `UploadVideo(ctx, filename, reader)` | Загрузка видео (ожидает обработку на сервере) |
+| `UploadFile(ctx, filename, reader)` | Загрузка файла (ожидает обработку на сервере) |
 
 Все методы загрузки возвращают `*Attachment`, который передаётся в `SendMessage` через `SendMessageOpts.Attaches`.
 
@@ -187,6 +189,16 @@ for pkt := range client.Packets() {
 |-------|----------|
 | `ResolveChannel(ctx, channelID)` | Информация о канале |
 | `ResolveByLink(ctx, link)` | Поиск канала или группы по ссылке |
+
+### Звонки
+
+| Метод | Описание |
+|-------|----------|
+| `Call(ctx, calleeExternalID, forceRelay)` | Инициирование звонка, возвращает `*CallSession` |
+| `WaitForCall(ctx, forceRelay)` | Ожидание входящего звонка, возвращает `*CallSession` |
+| `GetCallsExternalUserID(ctx)` | Получение своего внешнего ID в системе звонков |
+
+`CallSession` реализует `io.ReadWriteCloser` — двусторонний поток данных.
 
 ### Пользователи и профиль
 

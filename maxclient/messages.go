@@ -43,17 +43,27 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string, opt
 		"notify":  true,
 	}
 
-	return c.InvokeMethod(ctx, OpcodeSendMessage, payload)
+	resp, err := c.InvokeMethod(ctx, OpcodeSendMessage, payload)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkResponseError(resp); err != nil {
+		return nil, fmt.Errorf("send message: %w", err)
+	}
+	return resp, nil
 }
 
 // DeleteMessage deletes messages from a chat.
 func (c *Client) DeleteMessage(ctx context.Context, chatID int64, messageIDs []string, forMe bool) error {
-	_, err := c.InvokeMethod(ctx, OpcodeDeleteMessage, map[string]any{
+	resp, err := c.InvokeMethod(ctx, OpcodeDeleteMessage, map[string]any{
 		"chatId":     chatID,
 		"messageIds": messageIDs,
 		"forMe":      forMe,
 	})
 	if err != nil {
+		return fmt.Errorf("delete message: %w", err)
+	}
+	if err := checkResponseError(resp); err != nil {
 		return fmt.Errorf("delete message: %w", err)
 	}
 	return nil
@@ -68,10 +78,15 @@ func (c *Client) EditMessage(ctx context.Context, chatID int64, messageID string
 		"elements":  []any{},
 	}
 	if len(attaches) > 0 {
+		// TODO: verify if the server expects "attachments" or "attaches" for edit
+		// (SendMessage uses "attaches", but EditMessage has not been tested with attachments)
 		payload["attachments"] = attaches
 	}
-	_, err := c.InvokeMethod(ctx, OpcodeEditMessage, payload)
+	resp, err := c.InvokeMethod(ctx, OpcodeEditMessage, payload)
 	if err != nil {
+		return fmt.Errorf("edit message: %w", err)
+	}
+	if err := checkResponseError(resp); err != nil {
 		return fmt.Errorf("edit message: %w", err)
 	}
 	return nil
@@ -79,7 +94,7 @@ func (c *Client) EditMessage(ctx context.Context, chatID int64, messageID string
 
 // PinMessage pins a message in a chat.
 func (c *Client) PinMessage(ctx context.Context, chatID int64, messageID string, notify bool) error {
-	_, err := c.InvokeMethod(ctx, OpcodePinMessage, map[string]any{
+	resp, err := c.InvokeMethod(ctx, OpcodePinMessage, map[string]any{
 		"chatId":    chatID,
 		"notifyPin": notify,
 		"messageId": messageID,
@@ -87,16 +102,26 @@ func (c *Client) PinMessage(ctx context.Context, chatID int64, messageID string,
 	if err != nil {
 		return fmt.Errorf("pin message: %w", err)
 	}
+	if err := checkResponseError(resp); err != nil {
+		return fmt.Errorf("pin message: %w", err)
+	}
 	return nil
 }
 
 // GetHistory retrieves chat message history.
 func (c *Client) GetHistory(ctx context.Context, chatID int64, count int) (*Packet, error) {
-	return c.InvokeMethod(ctx, OpcodeGetHistory, map[string]any{
+	resp, err := c.InvokeMethod(ctx, OpcodeGetHistory, map[string]any{
 		"chatId":      chatID,
 		"from":        0,
 		"forward":     count,
 		"backward":    0,
 		"getMessages": true,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if err := checkResponseError(resp); err != nil {
+		return nil, fmt.Errorf("get history: %w", err)
+	}
+	return resp, nil
 }

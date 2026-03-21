@@ -38,7 +38,7 @@ func TestUploadPhoto(t *testing.T) {
 	defer c.Close()
 
 	data := []byte("fake-image-data")
-	att, err := c.UploadPhoto(ctx, 42, "test.jpg", bytes.NewReader(data))
+	att, err := c.UploadPhoto(ctx, "test.jpg", bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestUploadVideo(t *testing.T) {
 	c.Connect(ctx)
 	defer c.Close()
 
-	att, err := c.UploadVideo(ctx, 99, "test.mp4", bytes.NewReader([]byte("video")))
+	att, err := c.UploadVideo(ctx, "test.mp4", bytes.NewReader([]byte("video")))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestUploadFile(t *testing.T) {
 	c.Connect(ctx)
 	defer c.Close()
 
-	att, err := c.UploadFile(ctx, 55, "doc.pdf", bytes.NewReader([]byte("pdf-data")))
+	att, err := c.UploadFile(ctx, "doc.pdf", bytes.NewReader([]byte("pdf-data")))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
 	}
