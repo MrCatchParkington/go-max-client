@@ -2,7 +2,6 @@ package maxclient
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -22,8 +21,8 @@ func calcBackoff(attempt int, min, max time.Duration) time.Duration {
 }
 
 // reconnectAuth performs hello + login_by_token using invokeInternal
-// (which does not acquire reconnecting.RLock) to avoid deadlock,
-// since reconnectLoop already holds the write lock.
+// (which does not wait on reconnectCh) to avoid blocking,
+// since reconnectLoop has set reconnectCh to a blocked channel.
 func (c *Client) reconnectAuth(ctx context.Context, token, deviceID string) error {
 	// Send hello
 	if _, err := c.invokeInternal(ctx, OpcodeHello, c.buildHelloPayload(deviceID)); err != nil {
@@ -37,13 +36,8 @@ func (c *Client) reconnectAuth(ctx context.Context, token, deviceID string) erro
 	}
 
 	// Check for error in response
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(resp.Payload, &payload); err == nil {
-		if _, hasErr := payload["error"]; hasErr {
-			var errMsg string
-			json.Unmarshal(payload["error"], &errMsg)
-			return fmt.Errorf("login_by_token: server error: %s", errMsg)
-		}
+	if err := checkResponseError(resp); err != nil {
+		return fmt.Errorf("login_by_token: %w", err)
 	}
 
 	c.log.Info("authenticated by token")
@@ -52,19 +46,16 @@ func (c *Client) reconnectAuth(ctx context.Context, token, deviceID string) erro
 }
 
 // reconnectLoop attempts to re-establish the connection with exponential backoff.
-// Called when auto-reconnect is enabled and the connection drops.
-// Uses lifecycleCtx so that Close() can terminate the reconnect loop.
-// Uses atomic.Bool guard to ensure only one reconnectLoop runs at a time.
-func (c *Client) reconnectLoop() {
+// reconnectDone is created by recvLoop; closing it unblocks InvokeMethod waiters.
+// Uses lifecycleCtx so that Close() can terminate the loop.
+func (c *Client) reconnectLoop(reconnectDone chan struct{}) {
 	// Ensure only one reconnectLoop runs at a time
 	if !c.reconnectRunning.CompareAndSwap(false, true) {
+		close(reconnectDone) // unblock waiters if CAS fails
 		return
 	}
 	defer c.reconnectRunning.Store(false)
-
-	// Set reconnecting state — InvokeMethod will block while this is held
-	c.reconnecting.Lock()
-	defer c.reconnecting.Unlock()
+	defer close(reconnectDone) // unblock all InvokeMethod waiters
 
 	for attempt := 0; ; attempt++ {
 		backoff := calcBackoff(attempt, c.reconnectMin, c.reconnectMax)
@@ -94,7 +85,7 @@ func (c *Client) reconnectLoop() {
 			continue
 		}
 
-		// Re-authenticate using internal path (avoids reconnecting.RLock deadlock)
+		// Re-authenticate using internal path (avoids blocking on reconnectCh)
 		if c.token != "" && c.deviceID != "" {
 			if err := c.reconnectAuth(c.lifecycleCtx, c.token, c.deviceID); err != nil {
 				c.log.Warn("re-auth failed", "err", err)

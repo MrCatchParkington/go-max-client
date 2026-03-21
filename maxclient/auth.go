@@ -11,14 +11,14 @@ import (
 const defaultKeepaliveInterval = 30 * time.Second
 
 // newUUID generates a UUID v4 string using crypto/rand (no external dependency).
-func newUUID() string {
+func newUUID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic("maxclient: crypto/rand failed: " + err.Error())
+		return "", fmt.Errorf("maxclient: crypto/rand: %w", err)
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4
 	b[8] = (b[8] & 0x3f) | 0x80 // variant 2
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16]), nil
 }
 
 // withKeepaliveInterval overrides the keepalive interval (for testing).
@@ -60,7 +60,11 @@ func (c *Client) buildHelloPayload(deviceID string) map[string]any {
 // sendHello sends the hello packet (opcode 6) with device info.
 func (c *Client) sendHello(ctx context.Context, deviceID string) error {
 	if deviceID == "" {
-		deviceID = newUUID()
+		var err error
+		deviceID, err = newUUID()
+		if err != nil {
+			return err
+		}
 	}
 	c.deviceID = deviceID
 	_, err := c.InvokeMethod(ctx, OpcodeHello, c.buildHelloPayload(deviceID))
@@ -80,24 +84,22 @@ func (c *Client) AuthToken(ctx context.Context, token, deviceID string) error {
 	}
 
 	// Check for error in response
-	var payload map[string]json.RawMessage
-	if err := json.Unmarshal(resp.Payload, &payload); err == nil {
-		if _, hasErr := payload["error"]; hasErr {
-			var errMsg string
-			json.Unmarshal(payload["error"], &errMsg)
-			return fmt.Errorf("login_by_token: server error: %s", errMsg)
-		}
+	if err := checkResponseError(resp); err != nil {
+		return fmt.Errorf("login_by_token: %w", err)
 	}
 
 	// Extract own user ID from profile
-	if raw, ok := payload["profile"]; ok {
-		var profileData struct {
-			Contact struct {
-				ID int64 `json:"id"`
-			} `json:"contact"`
-		}
-		if json.Unmarshal(raw, &profileData) == nil {
-			c.ownUserID = profileData.Contact.ID
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Payload, &payload); err == nil {
+		if raw, ok := payload["profile"]; ok {
+			var profileData struct {
+				Contact struct {
+					ID int64 `json:"id"`
+				} `json:"contact"`
+			}
+			if json.Unmarshal(raw, &profileData) == nil {
+				c.ownUserID = profileData.Contact.ID
+			}
 		}
 	}
 
@@ -112,7 +114,10 @@ func (c *Client) AuthToken(ctx context.Context, token, deviceID string) error {
 // Sends hello -> requests QR code (opcode 288) -> stores trackId internally -> returns the QR link.
 // Consumer should display the link as a QR code, then call WaitQRAuth.
 func (c *Client) StartQRAuth(ctx context.Context) (string, error) {
-	deviceID := newUUID()
+	deviceID, err := newUUID()
+	if err != nil {
+		return "", err
+	}
 	if err := c.sendHello(ctx, deviceID); err != nil {
 		return "", fmt.Errorf("hello: %w", err)
 	}
@@ -220,6 +225,9 @@ func (c *Client) WaitQRAuth(ctx context.Context) (*QRAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("login_by_token after QR: %w", err)
 	}
+	if err := checkResponseError(lbtResp); err != nil {
+		return nil, fmt.Errorf("login_by_token after QR: %w", err)
+	}
 
 	// Extract own user ID from profile
 	var lbtPayload map[string]json.RawMessage
@@ -258,6 +266,7 @@ func (c *Client) WaitQRAuth(ctx context.Context) (*QRAuth, error) {
 // startKeepalive starts the keepalive goroutine idempotently.
 // If a keepalive goroutine is already running, it is cancelled before starting a new one.
 func (c *Client) startKeepalive() {
+	c.mu.Lock()
 	// Cancel existing keepalive if running
 	if c.keepaliveCancel != nil {
 		c.keepaliveCancel()
@@ -266,6 +275,7 @@ func (c *Client) startKeepalive() {
 	// Derive keepalive context from lifecycleCtx
 	keepCtx, keepCancel := context.WithCancel(c.lifecycleCtx)
 	c.keepaliveCancel = keepCancel
+	c.mu.Unlock()
 
 	go c.keepaliveLoop(keepCtx)
 }

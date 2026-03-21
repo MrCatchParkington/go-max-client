@@ -46,6 +46,8 @@ const (
 	OpcodeResolveByLink    = 89
 	OpcodeMessageEvent     = 128
 	OpcodeUploadComplete   = 136
+	OpcodeIncomingCall     = 137
+	OpcodeCallToken        = 158
 	OpcodeReactMessage     = 178
 	OpcodeGetReactions     = 181
 	OpcodeGetQR            = 288
@@ -83,6 +85,24 @@ func buildRequest(seq *seqCounter, opcode int, payload any) ([]byte, int, error)
 		return nil, s, fmt.Errorf("marshal request: %w", err)
 	}
 	return data, s, nil
+}
+
+// checkResponseError checks if a response packet contains a server-side error.
+// Returns nil if no error is found, or a descriptive error.
+func checkResponseError(pkt *Packet) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(pkt.Payload, &payload); err != nil {
+		return nil // can't parse — not an error envelope
+	}
+	raw, ok := payload["error"]
+	if !ok {
+		return nil
+	}
+	var errMsg string
+	if json.Unmarshal(raw, &errMsg) == nil && errMsg != "" {
+		return fmt.Errorf("server error: %s", errMsg)
+	}
+	return fmt.Errorf("server error: %s", string(raw))
 }
 
 // unmarshalStringOrNumber extracts a string from JSON that may be a string or number.

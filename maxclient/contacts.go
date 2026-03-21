@@ -61,6 +61,9 @@ func (c *Client) addContactByPhone(ctx context.Context, phone, firstName string)
 	if err != nil {
 		return nil, fmt.Errorf("add contact by phone: %w", err)
 	}
+	if err := checkResponseError(resp); err != nil {
+		return nil, fmt.Errorf("add contact by phone: %w", err)
+	}
 
 	var result struct {
 		Contact struct {
