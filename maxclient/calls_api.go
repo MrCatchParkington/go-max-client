@@ -80,27 +80,3 @@ func (a *callsAPI) login(ctx context.Context, callToken string) (*callsLoginResp
 	}
 	return &result, nil
 }
-
-func (a *callsAPI) startConversation(ctx context.Context, sessionKey, conversationID, externalUserID string) (*startConversationResponse, error) {
-	payloadJSON, err := json.Marshal(startConversationPayload{IsVideo: false})
-	if err != nil {
-		return nil, fmt.Errorf("calls startConversation: marshal payload: %w", err)
-	}
-	params := url.Values{
-		"method":          {"vchat.startConversation"},
-		"session_key":     {sessionKey},
-		"conversationId":  {conversationID},
-		"isVideo":         {"false"},
-		"protocolVersion": {CallsProtocolVersion},
-		"externalIds":     {externalUserID},
-		"payload":         {string(payloadJSON)},
-	}
-	var result startConversationResponse
-	if err := a.post(ctx, params, &result); err != nil {
-		return nil, fmt.Errorf("calls startConversation: %w", err)
-	}
-	if result.Endpoint == "" {
-		return nil, fmt.Errorf("calls startConversation: missing endpoint in response")
-	}
-	return &result, nil
-}

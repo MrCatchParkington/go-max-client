@@ -73,31 +73,6 @@ func TestCallsAPI_Login(t *testing.T) {
 	}
 }
 
-func TestCallsAPI_StartConversation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		if r.Form.Get("method") != "vchat.startConversation" {
-			t.Errorf("method = %q", r.Form.Get("method"))
-		}
-		if r.Form.Get("isVideo") != "false" {
-			t.Errorf("isVideo = %q", r.Form.Get("isVideo"))
-		}
-		json.NewEncoder(w).Encode(startConversationResponse{
-			Endpoint: "wss://sig.example.com/ws?userId=1&token=abc",
-		})
-	}))
-	defer srv.Close()
-
-	api := &callsAPI{baseURL: srv.URL, httpClient: http.DefaultClient}
-	resp, err := api.startConversation(context.Background(), "session-key", "conv-id", "ext-456")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp.Endpoint == "" {
-		t.Error("endpoint is empty")
-	}
-}
-
 func TestSignalingClient_ExchangeData(t *testing.T) {
 	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

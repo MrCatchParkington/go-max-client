@@ -84,10 +84,6 @@ type callsLoginResponse struct {
 	ExternalUserID   string `json:"external_user_id"`
 }
 
-type startConversationPayload struct {
-	IsVideo bool `json:"is_video"`
-}
-
 type startConversationResponse struct {
 	TurnServer struct {
 		Urls     []string `json:"urls"`
