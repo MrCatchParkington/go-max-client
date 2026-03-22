@@ -168,7 +168,7 @@ git commit -m "feat: FindUserByPhone returns ExternalID, make AddContactByPhone 
 
 - [ ] **Step 1: Add OpcodeFastStartCall to protocol.go**
 
-In `maxclient/protocol.go`, add `OpcodeFastStartCall` in the const block, between `OpcodeSubscribeChat` (line 39) and `OpcodeGroupOps` (line 40):
+In `maxclient/protocol.go`, add `OpcodeFastStartCall` in the const block, after `OpcodeGroupOps` (line 40) and before `OpcodePhotoUploadURL` (line 41):
 
 ```go
 OpcodeSubscribeChat    = 75
@@ -404,7 +404,7 @@ import (
 
 - [ ] **Step 2: Remove GetCallsExternalUserID()**
 
-In `maxclient/calls.go`, delete the `GetCallsExternalUserID` method (lines 178-191 in the original file — will be at the end after rewriting Call()):
+In `maxclient/calls.go`, delete the `GetCallsExternalUserID` method (the last method in the file):
 
 ```go
 // DELETE THIS ENTIRE BLOCK:
@@ -476,6 +476,57 @@ with single WebSocket request via opcode 78.
 
 BREAKING: Call() parameter type changed from string to int64.
 BREAKING: GetCallsExternalUserID() removed — use FindUserByPhone().ExternalID."
+```
+
+---
+
+---
+
+### Task 5: Update README.md
+
+**Files:**
+- Modify: `README.md:193-201`
+
+- [ ] **Step 1: Update the Calls table in README.md**
+
+In `README.md`, replace the Звонки section (lines 193-201):
+
+```markdown
+### Звонки
+
+| Метод | Описание |
+|-------|----------|
+| `Call(ctx, calleeExternalID, forceRelay)` | Инициирование звонка, возвращает `*CallSession` |
+| `WaitForCall(ctx, forceRelay)` | Ожидание входящего звонка, возвращает `*CallSession` |
+| `GetCallsExternalUserID(ctx)` | Получение своего внешнего ID в системе звонков |
+
+`CallSession` реализует `io.ReadWriteCloser` — двусторонний поток данных.
+```
+
+With:
+
+```markdown
+### Контакты
+
+| Метод | Описание |
+|-------|----------|
+| `FindUserByPhone(ctx, phone)` | Поиск пользователя по номеру телефона, возвращает `*User` с `ID` (chatID) и `ExternalID` |
+
+### Звонки
+
+| Метод | Описание |
+|-------|----------|
+| `Call(ctx, calleeExternalID, forceRelay)` | Инициирование звонка (`calleeExternalID` — `int64` из `User.ExternalID`), возвращает `*CallSession` |
+| `WaitForCall(ctx, forceRelay)` | Ожидание входящего звонка, возвращает `*CallSession` |
+
+`CallSession` реализует `io.ReadWriteCloser` — двусторонний поток данных.
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add README.md
+git commit -m "docs: update README for Call() and FindUserByPhone API changes"
 ```
 
 ---
