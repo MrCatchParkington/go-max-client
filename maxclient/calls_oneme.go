@@ -22,6 +22,63 @@ func (c *Client) getCallToken(ctx context.Context) (string, error) {
 	return result.Token, nil
 }
 
+// fastStartCall initiates a call via opcode 78 (FastStart).
+// Returns TURN/STUN servers and signaling endpoint — same shape as startConversation HTTP response.
+func (c *Client) fastStartCall(ctx context.Context, calleeExternalID int64) (*startConversationResponse, error) {
+	convID, err := newUUID()
+	if err != nil {
+		return nil, fmt.Errorf("calls: generate conversation ID: %w", err)
+	}
+	deviceID, err := newUUID()
+	if err != nil {
+		return nil, fmt.Errorf("calls: generate device ID: %w", err)
+	}
+
+	internalParams, err := json.Marshal(fastStartInternalParams{
+		DeviceID:        deviceID,
+		SDKVersion:      CallsClientVersion,
+		ClientAppKey:    CallsAppKey,
+		Platform:        CallsPlatform,
+		ProtocolVersion: 5,
+		DomainID:        "",
+		Capabilities:    CallsCapabilities,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("calls: marshal internal params: %w", err)
+	}
+
+	resp, err := c.InvokeMethod(ctx, OpcodeFastStartCall, fastStartRequest{
+		ConversationID: convID,
+		CalleeIDs:      []int64{calleeExternalID},
+		InternalParams: string(internalParams),
+		IsVideo:        false,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("calls: fast start: %w", err)
+	}
+	if err := checkResponseError(resp); err != nil {
+		return nil, fmt.Errorf("calls: fast start: %w", err)
+	}
+
+	var fsResp fastStartResponse
+	if err := json.Unmarshal(resp.Payload, &fsResp); err != nil {
+		return nil, fmt.Errorf("calls: parse fast start response: %w", err)
+	}
+	if fsResp.InternalCallerParams == "" {
+		return nil, fmt.Errorf("calls: fast start: empty internalCallerParams")
+	}
+
+	var startResp startConversationResponse
+	if err := json.Unmarshal([]byte(fsResp.InternalCallerParams), &startResp); err != nil {
+		return nil, fmt.Errorf("calls: parse internal caller params: %w", err)
+	}
+	if startResp.Endpoint == "" {
+		return nil, fmt.Errorf("calls: fast start: empty endpoint in internal caller params")
+	}
+
+	return &startResp, nil
+}
+
 // waitIncomingCall blocks until an incoming call notification (opcode 137) arrives.
 func (c *Client) waitIncomingCall(ctx context.Context) (*incomingCallPayload, *vcpDecoded, error) {
 	for {

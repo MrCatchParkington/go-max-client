@@ -45,6 +45,27 @@ type vcpDecoded struct {
 	TurnPassword    string `json:"trnp"`
 }
 
+type fastStartRequest struct {
+	ConversationID string  `json:"conversationId"`
+	CalleeIDs      []int64 `json:"calleeIds"`
+	InternalParams string  `json:"internalParams"`
+	IsVideo        bool    `json:"isVideo"`
+}
+
+type fastStartInternalParams struct {
+	DeviceID        string `json:"deviceId"`
+	SDKVersion      string `json:"sdkVersion"`
+	ClientAppKey    string `json:"clientAppKey"`
+	Platform        string `json:"platform"`
+	ProtocolVersion int    `json:"protocolVersion"`
+	DomainID        string `json:"domainId"`
+	Capabilities    string `json:"capabilities"`
+}
+
+type fastStartResponse struct {
+	InternalCallerParams string `json:"internalCallerParams"`
+}
+
 // --- Calls HTTP API types ---
 
 type callsSessionData struct {
@@ -61,10 +82,6 @@ type callsLoginResponse struct {
 	SessionSecretKey string `json:"session_secret_key"`
 	APIServer        string `json:"api_server"`
 	ExternalUserID   string `json:"external_user_id"`
-}
-
-type startConversationPayload struct {
-	IsVideo bool `json:"is_video"`
 }
 
 type startConversationResponse struct {

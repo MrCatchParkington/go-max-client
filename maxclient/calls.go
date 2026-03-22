@@ -4,38 +4,21 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
 // Call initiates a call to the given user and returns a CallSession
 // with a bidirectional data stream over ICE.
-// calleeExternalID is the callee's external user ID in the Calls system
-// (obtain via GetCallsExternalUserID on the callee side).
+// calleeExternalID is the callee's externalId in OneMe
+// (obtain via FindUserByPhone — it's the User.ExternalID field).
 // forceRelay=true restricts to TURN-only candidates (no P2P).
-func (c *Client) Call(ctx context.Context, calleeExternalID string, forceRelay bool) (*CallSession, error) {
-	callToken, err := c.getCallToken(ctx)
+func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bool) (*CallSession, error) {
+	startResp, err := c.fastStartCall(ctx, calleeExternalID)
 	if err != nil {
 		return nil, err
 	}
-	c.log.Info("got call token")
-
-	api := newCallsAPI(c.httpClient)
-	loginResp, err := api.login(ctx, callToken)
-	if err != nil {
-		return nil, err
-	}
-	c.log.Info("logged in to Calls API", "uid", loginResp.UID, "externalUserID", loginResp.ExternalUserID)
-
-	convID, err := newUUID()
-	if err != nil {
-		return nil, err
-	}
-	c.log.Info("starting conversation", "calleeExternalID", calleeExternalID, "ownExternalID", loginResp.ExternalUserID)
-	startResp, err := api.startConversation(ctx, loginResp.SessionKey, convID, calleeExternalID)
-	if err != nil {
-		return nil, err
-	}
-	c.log.Info("started conversation", "endpoint", startResp.Endpoint)
+	c.log.Info("fast start call", "endpoint", startResp.Endpoint)
 
 	sigParsed, err := url.Parse(startResp.Endpoint)
 	if err != nil {
@@ -62,9 +45,11 @@ func (c *Client) Call(ctx context.Context, calleeExternalID string, forceRelay b
 		sig.close()
 		return nil, err
 	}
+
+	calleeIDStr := strconv.FormatInt(calleeExternalID, 10)
 	peerID := int64(0)
 	for _, p := range hello.Conversation.Participants {
-		if p.ExternalID.ID != loginResp.ExternalUserID {
+		if p.ExternalID.ID == calleeIDStr {
 			peerID = p.ID
 			break
 		}
@@ -173,19 +158,4 @@ func (c *Client) WaitForCall(ctx context.Context, forceRelay bool) (*CallSession
 		agent:   agent,
 		closeFn: func() error { return sig.close() },
 	}, nil
-}
-
-// GetCallsExternalUserID returns this account's external user ID in the Calls system.
-// This is needed to tell the caller which externalIds to pass to startConversation.
-func (c *Client) GetCallsExternalUserID(ctx context.Context) (string, error) {
-	callToken, err := c.getCallToken(ctx)
-	if err != nil {
-		return "", err
-	}
-	api := newCallsAPI(c.httpClient)
-	loginResp, err := api.login(ctx, callToken)
-	if err != nil {
-		return "", err
-	}
-	return loginResp.ExternalUserID, nil
 }

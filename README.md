@@ -190,13 +190,18 @@ for pkt := range client.Packets() {
 | `ResolveChannel(ctx, channelID)` | Информация о канале |
 | `ResolveByLink(ctx, link)` | Поиск канала или группы по ссылке |
 
+### Контакты
+
+| Метод | Описание |
+|-------|----------|
+| `FindUserByPhone(ctx, phone)` | Поиск пользователя по номеру телефона, возвращает `*User` с `ID` (chatID) и `ExternalID` |
+
 ### Звонки
 
 | Метод | Описание |
 |-------|----------|
-| `Call(ctx, calleeExternalID, forceRelay)` | Инициирование звонка, возвращает `*CallSession` |
+| `Call(ctx, calleeExternalID, forceRelay)` | Инициирование звонка (`calleeExternalID` — `int64` из `User.ExternalID`), возвращает `*CallSession` |
 | `WaitForCall(ctx, forceRelay)` | Ожидание входящего звонка, возвращает `*CallSession` |
-| `GetCallsExternalUserID(ctx)` | Получение своего внешнего ID в системе звонков |
 
 `CallSession` реализует `io.ReadWriteCloser` — двусторонний поток данных.
 

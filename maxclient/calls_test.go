@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/coder/websocket"
 	gorillaWs "github.com/gorilla/websocket"
 	"github.com/pierrec/lz4/v4"
 )
@@ -73,28 +74,88 @@ func TestCallsAPI_Login(t *testing.T) {
 	}
 }
 
-func TestCallsAPI_StartConversation(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		if r.Form.Get("method") != "vchat.startConversation" {
-			t.Errorf("method = %q", r.Form.Get("method"))
-		}
-		if r.Form.Get("isVideo") != "false" {
-			t.Errorf("isVideo = %q", r.Form.Get("isVideo"))
-		}
-		json.NewEncoder(w).Encode(startConversationResponse{
-			Endpoint: "wss://sig.example.com/ws?userId=1&token=abc",
-		})
-	}))
-	defer srv.Close()
+func TestFastStartCall(t *testing.T) {
+	// Build a mock response: fastStartResponse with nested JSON in internalCallerParams
+	innerJSON := `{"turn_server":{"urls":["turn:turn.example.com"],"username":"u","credential":"p"},"stun_server":{"urls":["stun:stun.example.com"]},"endpoint":"wss://sig.example.com/ws?token=abc"}`
+	outerJSON, _ := json.Marshal(fastStartResponse{InternalCallerParams: innerJSON})
 
-	api := &callsAPI{baseURL: srv.URL, httpClient: http.DefaultClient}
-	resp, err := api.startConversation(context.Background(), "session-key", "conv-id", "ext-456")
+	var gotPayload map[string]any
+	srv, wsURL := mockWSServer(map[int]mockHandler{
+		OpcodeFastStartCall: func(ctx context.Context, conn *websocket.Conn, pkt Packet) error {
+			json.Unmarshal(pkt.Payload, &gotPayload)
+			return respondOK(string(outerJSON))(ctx, conn, pkt)
+		},
+	})
+	defer srv.Close()
+	c := New(withWSURL(wsURL))
+	ctx := context.Background()
+	c.Connect(ctx)
+	defer c.Close()
+
+	resp, err := c.fastStartCall(ctx, 87654321)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("fastStartCall: %v", err)
 	}
-	if resp.Endpoint == "" {
-		t.Error("endpoint is empty")
+
+	// Verify request payload
+	calleeIDs, _ := gotPayload["calleeIds"].([]any)
+	if len(calleeIDs) != 1 || int64(calleeIDs[0].(float64)) != 87654321 {
+		t.Errorf("calleeIds = %v, want [87654321]", calleeIDs)
+	}
+	if gotPayload["conversationId"] == "" {
+		t.Error("conversationId is empty")
+	}
+	if gotPayload["internalParams"] == nil {
+		t.Error("internalParams is nil")
+	}
+
+	// Verify parsed response (double unmarshal)
+	if resp.Endpoint != "wss://sig.example.com/ws?token=abc" {
+		t.Errorf("Endpoint = %q, want wss://sig.example.com/ws?token=abc", resp.Endpoint)
+	}
+	if len(resp.TurnServer.Urls) != 1 || resp.TurnServer.Urls[0] != "turn:turn.example.com" {
+		t.Errorf("TurnServer.Urls = %v", resp.TurnServer.Urls)
+	}
+	if resp.TurnServer.Username != "u" {
+		t.Errorf("TurnServer.Username = %q, want u", resp.TurnServer.Username)
+	}
+	if len(resp.StunServer.Urls) != 1 || resp.StunServer.Urls[0] != "stun:stun.example.com" {
+		t.Errorf("StunServer.Urls = %v", resp.StunServer.Urls)
+	}
+}
+
+func TestFastStartCallEmptyInternalParams(t *testing.T) {
+	outerJSON, _ := json.Marshal(fastStartResponse{InternalCallerParams: ""})
+	srv, wsURL := mockWSServer(map[int]mockHandler{
+		OpcodeFastStartCall: respondOK(string(outerJSON)),
+	})
+	defer srv.Close()
+	c := New(withWSURL(wsURL))
+	ctx := context.Background()
+	c.Connect(ctx)
+	defer c.Close()
+
+	_, err := c.fastStartCall(ctx, 12345678)
+	if err == nil {
+		t.Fatal("expected error for empty internalCallerParams")
+	}
+}
+
+func TestFastStartCallEmptyEndpoint(t *testing.T) {
+	innerJSON := `{"turn_server":{},"stun_server":{},"endpoint":""}`
+	outerJSON, _ := json.Marshal(fastStartResponse{InternalCallerParams: innerJSON})
+	srv, wsURL := mockWSServer(map[int]mockHandler{
+		OpcodeFastStartCall: respondOK(string(outerJSON)),
+	})
+	defer srv.Close()
+	c := New(withWSURL(wsURL))
+	ctx := context.Background()
+	c.Connect(ctx)
+	defer c.Close()
+
+	_, err := c.fastStartCall(ctx, 12345678)
+	if err == nil {
+		t.Fatal("expected error for empty endpoint")
 	}
 }
 
