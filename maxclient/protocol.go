@@ -38,6 +38,7 @@ const (
 	OpcodeEditMessage      = 67
 	OpcodeSubscribeChat    = 75
 	OpcodeGroupOps         = 77
+	OpcodeFastStartCall    = 78
 	OpcodePhotoUploadURL   = 80
 	OpcodeVideoUploadURL   = 82
 	OpcodeVideoDownloadURL = 83
