@@ -66,10 +66,11 @@ type Attachment struct {
 
 // User represents a MAX user.
 type User struct {
-	ID        int64  `json:"id"`
-	FirstName string `json:"firstName,omitempty"`
-	LastName  string `json:"lastName,omitempty"`
-	Phone     string `json:"phone,omitempty"`
+	ID         int64  `json:"id"`
+	ExternalID int64  `json:"externalId,omitempty"`
+	FirstName  string `json:"firstName,omitempty"`
+	LastName   string `json:"lastName,omitempty"`
+	Phone      string `json:"phone,omitempty"`
 }
 
 // Group represents a MAX group chat.

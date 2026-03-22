@@ -7,26 +7,19 @@ import (
 	"strconv"
 )
 
-// AddContactByPhone adds a user to contacts by phone number and returns their info.
-// The phone should be in E.164 format (e.g. "+79991234567").
-// The firstName is stored as the contact's custom display name.
-// The returned User.ID can be used directly as a chatID for SendMessage (DM chatID == userID).
-func (c *Client) AddContactByPhone(ctx context.Context, phone, firstName string) (*User, error) {
-	return c.addContactByPhone(ctx, phone, firstName)
-}
-
 // FindUserByPhone looks up a user by phone number.
-// Calls AddContactByPhone, then resolves the real userId from chat participants,
-// because contact.id is a contact record ID, not the user's real ID.
+// Calls addContactByPhone to get the user's externalId (contact.id),
+// then resolves the chatID from chat participants via ResolveChannel.
 func (c *Client) FindUserByPhone(ctx context.Context, phone string) (*User, error) {
 	user, err := c.addContactByPhone(ctx, phone, "_")
 	if err != nil {
 		return nil, err
 	}
-	contactID := user.ID
+	// contact.id from AddContactByPhone is the user's externalId in OneMe.
+	user.ExternalID = user.ID
 
-	// Resolve the real userId from chat participants.
-	resp, err := c.ResolveChannel(ctx, contactID)
+	// Resolve the chatID from chat participants.
+	resp, err := c.ResolveChannel(ctx, user.ExternalID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve contact chat: %w", err)
 	}
@@ -41,8 +34,8 @@ func (c *Client) FindUserByPhone(ctx context.Context, phone string) (*User, erro
 		for _, chat := range resolved.Chats {
 			for pidStr := range chat.Participants {
 				if pidStr != ownID {
-					if realID, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
-						user.ID = realID
+					if chatID, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+						user.ID = chatID
 						return user, nil
 					}
 				}

@@ -37,7 +37,7 @@ func TestAddContactByPhone(t *testing.T) {
 	c.Connect(ctx)
 	defer c.Close()
 
-	user, err := c.AddContactByPhone(ctx, "+79991234567", "Test")
+	user, err := c.addContactByPhone(ctx, "+79991234567", "Test")
 	if err != nil {
 		t.Fatalf("AddContactByPhone: %v", err)
 	}
@@ -93,9 +93,13 @@ func TestFindUserByPhone(t *testing.T) {
 		t.Errorf("firstName = %v, want _ (placeholder)", payload["firstName"])
 	}
 
-	// user.ID should be the real userId (55501), not the contact record ID (90001)
+	// user.ID should be the chatID (55501), not the contact.id (90001)
 	if user.ID != 55501 {
-		t.Errorf("ID = %d, want 55501 (real userId from participants)", user.ID)
+		t.Errorf("ID = %d, want 55501 (chatID from participants)", user.ID)
+	}
+	// ExternalID should be the contact.id from AddContactByPhone (90001)
+	if user.ExternalID != 90001 {
+		t.Errorf("ExternalID = %d, want 90001 (externalId from contact)", user.ExternalID)
 	}
 }
 
@@ -117,7 +121,7 @@ func TestAddContactByPhoneNoONEMEName(t *testing.T) {
 	c.Connect(ctx)
 	defer c.Close()
 
-	user, err := c.AddContactByPhone(ctx, "+79991234567", "Custom")
+	user, err := c.addContactByPhone(ctx, "+79991234567", "Custom")
 	if err != nil {
 		t.Fatalf("AddContactByPhone: %v", err)
 	}
@@ -136,7 +140,7 @@ func TestAddContactByPhoneServerError(t *testing.T) {
 	c.Connect(ctx)
 	defer c.Close()
 
-	user, err := c.AddContactByPhone(ctx, "+70000000000", "X")
+	user, err := c.addContactByPhone(ctx, "+70000000000", "X")
 	// Server returns error payload without "contact" object — parsed user has zero ID.
 	if err != nil {
 		return // transport error is also acceptable
