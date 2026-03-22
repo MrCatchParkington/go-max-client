@@ -40,11 +40,11 @@ type User struct {
 
 - Preserves `contact.id` from AddContactByPhone as `ExternalID`
 - chatID from ResolveChannel as `ID` (unchanged semantics)
-- Fix misleading comment about "contact record ID"
+- Corrected comment: `contact.id` is the user's externalId in OneMe (not a "contact record ID")
 
 ### 3. AddContactByPhone — make private
 
-Remove the public `AddContactByPhone()` wrapper. The private `addContactByPhone()` already exists. `FindUserByPhone` is the single public method for resolving users by phone.
+Remove the public `AddContactByPhone()` wrapper (line 14 of `contacts.go`). The private `addContactByPhone()` already exists and is unchanged. `FindUserByPhone` is the single public method for resolving users by phone.
 
 ### 4. FastStart — opcode 78 (`calls_oneme.go`, `calls_types.go`)
 
@@ -58,20 +58,20 @@ Request types:
 
 ```go
 type fastStartRequest struct {
-    ConversationID string  `json:"conversationId"`
+    ConversationID string  `json:"conversationId"` // generated UUID (via newUUID() from auth.go)
     CalleeIDs      []int64 `json:"calleeIds"`
     InternalParams string  `json:"internalParams"` // JSON-encoded fastStartInternalParams
     IsVideo        bool    `json:"isVideo"`
 }
 
 type fastStartInternalParams struct {
-    DeviceID        string `json:"deviceId"`
-    SDKVersion      string `json:"sdkVersion"`
-    ClientAppKey    string `json:"clientAppKey"`
-    Platform        string `json:"platform"`
-    ProtocolVersion int    `json:"protocolVersion"` // number, not string (value: 5)
-    DomainID        string `json:"domainId"`
-    Capabilities    string `json:"capabilities"`
+    DeviceID        string `json:"deviceId"`        // generated UUID (via newUUID())
+    SDKVersion      string `json:"sdkVersion"`      // CallsClientVersion ("1.1")
+    ClientAppKey    string `json:"clientAppKey"`     // CallsAppKey ("CNHIJPLGDIHBABABA")
+    Platform        string `json:"platform"`         // CallsPlatform ("WEB")
+    ProtocolVersion int    `json:"protocolVersion"`  // 5 (number, not string)
+    DomainID        string `json:"domainId"`         // "" (empty string)
+    Capabilities    string `json:"capabilities"`     // CallsCapabilities ("603F")
 }
 ```
 
@@ -84,10 +84,12 @@ type fastStartResponse struct {
 }
 
 // Second level: unmarshal InternalCallerParams string into startConversationResponse
-// (reuses existing type — has Endpoint, TurnServer, StunServer)
+// (reuses existing type — has Endpoint, TurnServer, StunServer with matching JSON tags)
 ```
 
-### 5. Call() signature change (`calls.go`)
+Error handling: `fastStartCall()` must validate that `InternalCallerParams` is non-empty after the first unmarshal, and that `Endpoint` is non-empty after the second unmarshal.
+
+### 5. Call() — full flow after FastStart (`calls.go`)
 
 ```go
 // Before:
@@ -97,7 +99,19 @@ func (c *Client) Call(ctx context.Context, calleeExternalID string, forceRelay b
 func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bool) (*CallSession, error)
 ```
 
-Body: single `InvokeMethod(ctx, OpcodeFastStartCall, ...)` replaces 3 HTTP requests.
+**`getCallToken` (opcode 158) is NOT needed for FastStart.** The OneMe WebSocket session is already authenticated; opcode 78 does not require a separate call token.
+
+Full `Call()` flow after the change:
+
+1. `fastStartCall(ctx, calleeExternalID)` → returns `*startConversationResponse` (endpoint + TURN/STUN)
+2. Parse `Endpoint` URL, append query params (platform, version, capabilities, etc.) — same as current code
+3. Connect signaling WebSocket at the endpoint — unchanged
+4. Receive server hello, find peer participant — unchanged
+5. ICE connect via `iceConnector.connect()` — unchanged
+
+Steps 2–5 are identical to the current implementation. Only step 1 changes (FastStart replaces getCallToken + HTTP login + HTTP startConversation).
+
+**Peer discovery after FastStart:** The current `Call()` finds the peer by comparing `participant.ExternalID.ID` (string) against `loginResp.ExternalUserID` (string from HTTP login). After FastStart, we no longer have `loginResp`. Instead, we can identify the peer as the participant whose externalId differs from the callee's (or simply use the callee's externalId to find them). The exact approach: take the participant whose `ExternalID.ID` matches `calleeExternalID` — that is the peer.
 
 ### 6. Remove GetCallsExternalUserID()
 
@@ -109,19 +123,20 @@ Fully removed (not deprecated). No longer needed since `FindUserByPhone` returns
 - `calls_signaling.go` — unchanged
 - `calls_ice.go` — unchanged
 - `iceConnector.connect(*startConversationResponse, ...)` — contract preserved
+- `newUUID()` in `auth.go` — used by `fastStartCall()` for `ConversationID` and `DeviceID`
 
 ## File Change Summary
 
 | File | Changes |
 |---|---|
 | `types.go` | `User` += `ExternalID int64` |
-| `contacts.go` | Remove public `AddContactByPhone()`, `FindUserByPhone` saves both IDs |
+| `contacts.go` | Remove public `AddContactByPhone()`, `FindUserByPhone` saves both IDs, fix comment |
 | `protocol.go` | `OpcodeFastStartCall = 78` |
 | `calls_types.go` | Add `fastStartRequest`, `fastStartInternalParams`, `fastStartResponse` |
-| `calls_oneme.go` | Add `fastStartCall()` method (opcode 78, double unmarshal) |
-| `calls.go` | `Call()`: signature `int64`, body → FastStart. Remove `GetCallsExternalUserID()` |
-| `contacts_test.go` | Update: AddContactByPhone now private, FindUserByPhone checks both ID and ExternalID |
-| `calls_test.go` | Update: Call() parameter int64 |
+| `calls_oneme.go` | Add private `fastStartCall()` method (opcode 78, double unmarshal) |
+| `calls.go` | `Call()`: signature `int64`, body → FastStart, updated peer discovery. Remove `GetCallsExternalUserID()` |
+| `contacts_test.go` | `TestAddContactByPhone`, `TestAddContactByPhoneNoONEMEName`, `TestAddContactByPhoneServerError`: convert to use private `addContactByPhone` (package-internal tests). `TestFindUserByPhone`: assert both `user.ID` (chatID) and `user.ExternalID` (externalId) |
+| `calls_test.go` | No changes needed — existing tests cover `callsAPI` and signaling, not `Call()` directly |
 | `calls_api.go` | No changes |
 | `calls_signaling.go` | No changes |
 | `calls_ice.go` | No changes |
@@ -134,6 +149,18 @@ Fully removed (not deprecated). No longer needed since `FindUserByPhone` returns
 4. `User.ExternalID` — new field (non-breaking, additive)
 
 All removed/changed APIs are covered by `FindUserByPhone` + `User.ExternalID`.
+
+Caller migration:
+
+```go
+// Before:
+extID, _ := client.GetCallsExternalUserID(ctx)
+session, _ := client.Call(ctx, extID, false)
+
+// After:
+user, _ := client.FindUserByPhone(ctx, "+79991234567")
+session, _ := client.Call(ctx, user.ExternalID, false)
+```
 
 ## Security
 
