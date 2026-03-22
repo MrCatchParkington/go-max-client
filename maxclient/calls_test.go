@@ -76,7 +76,7 @@ func TestCallsAPI_Login(t *testing.T) {
 
 func TestFastStartCall(t *testing.T) {
 	// Build a mock response: fastStartResponse with nested JSON in internalCallerParams
-	innerJSON := `{"turn_server":{"urls":["turn:turn.example.com"],"username":"u","credential":"p"},"stun_server":{"urls":["stun:stun.example.com"]},"endpoint":"wss://sig.example.com/ws?token=abc"}`
+	innerJSON := `{"turn":{"urls":["turn:turn.example.com"],"username":"u","credential":"p"},"stun":{"urls":["stun:stun.example.com"]},"endpoint":"wss://sig.example.com/ws?token=abc"}`
 	outerJSON, _ := json.Marshal(fastStartResponse{InternalCallerParams: innerJSON})
 
 	var gotPayload map[string]any
@@ -142,7 +142,7 @@ func TestFastStartCallEmptyInternalParams(t *testing.T) {
 }
 
 func TestFastStartCallEmptyEndpoint(t *testing.T) {
-	innerJSON := `{"turn_server":{},"stun_server":{},"endpoint":""}`
+	innerJSON := `{"turn":{},"stun":{},"endpoint":""}`
 	outerJSON, _ := json.Marshal(fastStartResponse{InternalCallerParams: innerJSON})
 	srv, wsURL := mockWSServer(map[int]mockHandler{
 		OpcodeFastStartCall: respondOK(string(outerJSON)),

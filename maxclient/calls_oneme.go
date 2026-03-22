@@ -68,15 +68,23 @@ func (c *Client) fastStartCall(ctx context.Context, calleeExternalID int64) (*st
 		return nil, fmt.Errorf("calls: fast start: empty internalCallerParams")
 	}
 
-	var startResp startConversationResponse
-	if err := json.Unmarshal([]byte(fsResp.InternalCallerParams), &startResp); err != nil {
+	// FastStart uses "turn"/"stun" field names, not "turn_server"/"stun_server".
+	var fsParams fastStartCallerParams
+	if err := json.Unmarshal([]byte(fsResp.InternalCallerParams), &fsParams); err != nil {
 		return nil, fmt.Errorf("calls: parse internal caller params: %w", err)
 	}
-	if startResp.Endpoint == "" {
+	if fsParams.Endpoint == "" {
 		return nil, fmt.Errorf("calls: fast start: empty endpoint in internal caller params")
 	}
 
-	return &startResp, nil
+	// Convert to startConversationResponse (used by ICE connector).
+	startResp := &startConversationResponse{Endpoint: fsParams.Endpoint}
+	startResp.TurnServer.Urls = fsParams.Turn.Urls
+	startResp.TurnServer.Username = fsParams.Turn.Username
+	startResp.TurnServer.Password = fsParams.Turn.Credential
+	startResp.StunServer.Urls = fsParams.Stun.Urls
+
+	return startResp, nil
 }
 
 // waitIncomingCall blocks until an incoming call notification (opcode 137) arrives.
