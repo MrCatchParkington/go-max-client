@@ -29,21 +29,23 @@ func (c *Client) FindUserByPhone(ctx context.Context, phone string) (*User, erro
 			Participants map[string]any `json:"participants"`
 		} `json:"chats"`
 	}
-	if err := json.Unmarshal(resp.Payload, &resolved); err == nil {
-		ownID := strconv.FormatInt(c.ownUserID, 10)
-		for _, chat := range resolved.Chats {
-			for pidStr := range chat.Participants {
-				if pidStr != ownID {
-					if chatID, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
-						user.ID = chatID
-						return user, nil
-					}
+	if err := json.Unmarshal(resp.Payload, &resolved); err != nil {
+		return nil, fmt.Errorf("find user by phone: parse resolve response: %w", err)
+	}
+
+	ownID := strconv.FormatInt(c.ownUserID, 10)
+	for _, chat := range resolved.Chats {
+		for pidStr := range chat.Participants {
+			if pidStr != ownID {
+				if chatID, err := strconv.ParseInt(pidStr, 10, 64); err == nil {
+					user.ID = chatID
+					return user, nil
 				}
 			}
 		}
 	}
 
-	return user, nil
+	return nil, fmt.Errorf("find user by phone: could not resolve chatID from participants")
 }
 
 func (c *Client) addContactByPhone(ctx context.Context, phone, firstName string) (*User, error) {
