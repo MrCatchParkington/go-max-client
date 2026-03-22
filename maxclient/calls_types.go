@@ -66,6 +66,20 @@ type fastStartResponse struct {
 	InternalCallerParams string `json:"internalCallerParams"`
 }
 
+// fastStartCallerParams is the parsed internalCallerParams from FastStart.
+// Field names differ from startConversationResponse: "turn"/"stun" vs "turn_server"/"stun_server".
+type fastStartCallerParams struct {
+	Endpoint string `json:"endpoint"`
+	Turn     struct {
+		Urls       []string `json:"urls"`
+		Username   string   `json:"username"`
+		Credential string   `json:"credential"`
+	} `json:"turn"`
+	Stun struct {
+		Urls []string `json:"urls"`
+	} `json:"stun"`
+}
+
 // --- Calls HTTP API types ---
 
 type callsSessionData struct {
