@@ -111,7 +111,7 @@ Full `Call()` flow after the change:
 
 Steps 2–5 are identical to the current implementation. Only step 1 changes (FastStart replaces getCallToken + HTTP login + HTTP startConversation).
 
-**Peer discovery after FastStart:** The current `Call()` finds the peer by comparing `participant.ExternalID.ID` (string) against `loginResp.ExternalUserID` (string from HTTP login). After FastStart, we no longer have `loginResp`. Instead, we can identify the peer as the participant whose externalId differs from the callee's (or simply use the callee's externalId to find them). The exact approach: take the participant whose `ExternalID.ID` matches `calleeExternalID` — that is the peer.
+**Peer discovery after FastStart:** The current `Call()` finds the peer by comparing `participant.ExternalID.ID` (string) against `loginResp.ExternalUserID` (string from HTTP login). After FastStart, we no longer have `loginResp`. Instead, find the peer by matching `calleeExternalID` against participants: `strconv.FormatInt(calleeExternalID, 10) == participant.ExternalID.ID` (note: `ExternalID.ID` is a `string` in the signaling protocol, so `int64` → `string` conversion is needed). The single `calleeIds` value is wrapped as `[]int64{calleeExternalID}` in the request.
 
 ### 6. Remove GetCallsExternalUserID()
 
@@ -119,10 +119,11 @@ Fully removed (not deprecated). No longer needed since `FindUserByPhone` returns
 
 ### 7. Preserved code
 
-- `calls_api.go` — unchanged, still needed for `WaitForCall()`
+- `calls_api.go` — `login()` still needed for `WaitForCall()` (incoming calls). `startConversation()` becomes dead code after this change — remove it and its test (`TestCallsAPI_StartConversation`).
 - `calls_signaling.go` — unchanged
 - `calls_ice.go` — unchanged
 - `iceConnector.connect(*startConversationResponse, ...)` — contract preserved
+- `getCallToken()` in `calls_oneme.go` — still needed for `WaitForCall()`, only removed from the outgoing `Call()` path
 - `newUUID()` in `auth.go` — used by `fastStartCall()` for `ConversationID` and `DeviceID`
 
 ## File Change Summary
@@ -136,8 +137,8 @@ Fully removed (not deprecated). No longer needed since `FindUserByPhone` returns
 | `calls_oneme.go` | Add private `fastStartCall()` method (opcode 78, double unmarshal) |
 | `calls.go` | `Call()`: signature `int64`, body → FastStart, updated peer discovery. Remove `GetCallsExternalUserID()` |
 | `contacts_test.go` | `TestAddContactByPhone`, `TestAddContactByPhoneNoONEMEName`, `TestAddContactByPhoneServerError`: convert to use private `addContactByPhone` (package-internal tests). `TestFindUserByPhone`: assert both `user.ID` (chatID) and `user.ExternalID` (externalId) |
-| `calls_test.go` | No changes needed — existing tests cover `callsAPI` and signaling, not `Call()` directly |
-| `calls_api.go` | No changes |
+| `calls_test.go` | Remove `TestCallsAPI_StartConversation` (dead code) |
+| `calls_api.go` | Remove `startConversation()` method (dead code after FastStart; `login()` preserved for `WaitForCall`) |
 | `calls_signaling.go` | No changes |
 | `calls_ice.go` | No changes |
 
