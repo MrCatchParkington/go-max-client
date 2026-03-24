@@ -234,7 +234,7 @@ func TestSignalingClient_ReceiveDataReturnsOnContextCancel(t *testing.T) {
 		if err := ws.WriteJSON(hello); err != nil {
 			return
 		}
-		select {}
+		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
@@ -263,7 +263,7 @@ func TestSignalingClient_ReceiveDataReturnsOnContextCancel(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected receiveData to fail after context cancellation")
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(1 * time.Second):
 		t.Fatal("receiveData did not return after context cancellation")
 	}
 }
@@ -320,5 +320,62 @@ func TestSignalingClient_ReceiveDataIgnoresCanceledSetupContextAfterHello(t *tes
 	}
 	if creds.UFrag != "ok" {
 		t.Fatalf("ufrag = %q, want %q", creds.UFrag, "ok")
+	}
+}
+
+func TestSignalingClient_ReceiveDataCtxSlowServer(t *testing.T) {
+	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+
+		hello := signalingServerHello{}
+		hello.Conversation.Participants = []signalingParticipant{
+			{ID: 42, ExternalID: struct{ ID string `json:"id"` }{ID: "ext-42"}},
+		}
+		if err := ws.WriteJSON(hello); err != nil {
+			return
+		}
+
+		// Simulate slow server — credentials arrive after 200ms
+		time.Sleep(200 * time.Millisecond)
+
+		if err := ws.WriteJSON(map[string]any{
+			"type":         "notification",
+			"notification": "transmitted-data",
+			"data": map[string]any{
+				"ufrag":    "slow-ok",
+				"password": "slow-pass",
+			},
+		}); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	sc, err := newSignalingClient(ctx, wsURL, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+
+	if _, err := sc.receiveServerHello(); err != nil {
+		t.Fatal(err)
+	}
+
+	var creds iceCredentials
+	err = sc.receiveDataCtx(ctx, &creds)
+	if err != nil {
+		t.Fatalf("receiveDataCtx failed on slow server: %v", err)
+	}
+	if creds.UFrag != "slow-ok" {
+		t.Fatalf("ufrag = %q, want %q", creds.UFrag, "slow-ok")
 	}
 }

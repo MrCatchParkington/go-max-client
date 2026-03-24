@@ -115,42 +115,17 @@ func (sc *signalingClient) receiveData(dst any) error {
 }
 
 func (sc *signalingClient) receiveDataCtx(ctx context.Context, dst any) error {
-	const readTimeout = 100 * time.Millisecond
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-		sc.conn.SetReadDeadline(time.Now().Add(readTimeout))
-		_, raw, err := sc.conn.ReadMessage()
-		if err != nil {
-			if gorillaWs.IsUnexpectedCloseError(err) {
-				return fmt.Errorf("signaling: read: %w", err)
-			}
-			if ne, ok := err.(interface{ Timeout() bool }); ok && ne.Timeout() {
-				continue
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-			return fmt.Errorf("signaling: read: %w", err)
-		}
-		if string(raw) == "ping" {
-			if err := sc.writePong(); err != nil {
-				sc.log.Warn("signaling: failed to write pong", "err", err)
-			}
-			continue
-		}
-		var notif signalingNotification
-		if err := json.Unmarshal(raw, &notif); err != nil {
-			continue
-		}
-		if notif.Type == "notification" && notif.Notification == "transmitted-data" {
-			return json.Unmarshal(notif.Data, dst)
-		}
+	ch := make(chan error, 1)
+	go func() {
+		ch <- sc.receiveData(dst)
+	}()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		sc.close()
+		<-ch
+		return ctx.Err()
 	}
 }
 
