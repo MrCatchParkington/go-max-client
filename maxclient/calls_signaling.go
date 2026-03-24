@@ -18,8 +18,10 @@ type signalingClient struct {
 	log       *slog.Logger
 	writeMu   sync.Mutex
 	closeOnce sync.Once
+	detachOnce sync.Once
 	closeErr  error
 	done      chan struct{}
+	setupDone chan struct{}
 }
 
 func newSignalingClient(ctx context.Context, wsURL string, log *slog.Logger) (*signalingClient, error) {
@@ -31,10 +33,15 @@ func newSignalingClient(ctx context.Context, wsURL string, log *slog.Logger) (*s
 	if err != nil {
 		return nil, fmt.Errorf("signaling: connect: %w", err)
 	}
-	sc := &signalingClient{conn: conn, log: log, done: make(chan struct{})}
-	// No ctx-based cleanup goroutine: signaling lifetime is managed by
-	// CallSession.Close() -> closeFn -> sig.close(), not by the setup context.
-	// This prevents a timeout/cancel on the setup ctx from killing an active call.
+	sc := &signalingClient{conn: conn, log: log, done: make(chan struct{}), setupDone: make(chan struct{})}
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = sc.close()
+		case <-sc.done:
+		case <-sc.setupDone:
+		}
+	}()
 	return sc, nil
 }
 
@@ -115,6 +122,12 @@ func (sc *signalingClient) receiveData(dst any) error {
 			return json.Unmarshal(notif.Data, dst)
 		}
 	}
+}
+
+func (sc *signalingClient) detachContext() {
+	sc.detachOnce.Do(func() {
+		close(sc.setupDone)
+	})
 }
 
 func (sc *signalingClient) writePong() error {
