@@ -72,7 +72,7 @@ func (ic *iceConnector) connect(ctx context.Context, turn *startConversationResp
 
 	// Receive remote credentials
 	var remoteCreds iceCredentials
-	if err := ic.signaling.receiveData(&remoteCreds); err != nil {
+	if err := ic.signaling.receiveDataCtx(ctx, &remoteCreds); err != nil {
 		agent.Close()
 		return nil, nil, fmt.Errorf("ice: receive credentials: %w", err)
 	}

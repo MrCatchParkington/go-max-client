@@ -253,7 +253,7 @@ func TestSignalingClient_ReceiveDataReturnsOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		var creds iceCredentials
-		done <- sc.receiveData(&creds)
+		done <- sc.receiveDataCtx(ctx, &creds)
 	}()
 
 	cancel()
@@ -265,5 +265,60 @@ func TestSignalingClient_ReceiveDataReturnsOnContextCancel(t *testing.T) {
 		}
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("receiveData did not return after context cancellation")
+	}
+}
+
+func TestSignalingClient_ReceiveDataIgnoresCanceledSetupContextAfterHello(t *testing.T) {
+	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+
+		hello := signalingServerHello{}
+		hello.Conversation.Participants = []signalingParticipant{
+			{ID: 42, ExternalID: struct{ ID string `json:"id"` }{ID: "ext-42"}},
+		}
+		if err := ws.WriteJSON(hello); err != nil {
+			return
+		}
+		if err := ws.WriteJSON(map[string]any{
+			"type":         "notification",
+			"notification": "transmitted-data",
+			"data": map[string]any{
+				"ufrag":    "ok",
+				"password": "pass",
+			},
+		}); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	sc, err := newSignalingClient(ctx, wsURL, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+
+	if _, err := sc.receiveServerHello(); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+
+	var creds iceCredentials
+	err = sc.receiveData(&creds)
+	if err != nil {
+		t.Fatalf("receiveData failed after setup context cancel: %v", err)
+	}
+	if creds.UFrag != "ok" {
+		t.Fatalf("ufrag = %q, want %q", creds.UFrag, "ok")
 	}
 }

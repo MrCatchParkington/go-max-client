@@ -65,7 +65,6 @@ func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bo
 		sig.close()
 		return nil, err
 	}
-	sig.detachContext()
 	c.log.Info("ICE connection established")
 
 	return &CallSession{
@@ -152,7 +151,6 @@ func (c *Client) WaitForCall(ctx context.Context, forceRelay bool) (*CallSession
 		sig.close()
 		return nil, err
 	}
-	sig.detachContext()
 	c.log.Info("ICE connection established (incoming call)")
 
 	return &CallSession{
