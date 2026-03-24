@@ -32,9 +32,6 @@ func newSignalingClient(ctx context.Context, wsURL string, log *slog.Logger) (*s
 		return nil, fmt.Errorf("signaling: connect: %w", err)
 	}
 	sc := &signalingClient{conn: conn, log: log, done: make(chan struct{})}
-	// No ctx-based cleanup goroutine: signaling lifetime is managed by
-	// CallSession.Close() -> closeFn -> sig.close(), not by the setup context.
-	// This prevents a timeout/cancel on the setup ctx from killing an active call.
 	return sc, nil
 }
 
@@ -114,6 +111,21 @@ func (sc *signalingClient) receiveData(dst any) error {
 		if notif.Type == "notification" && notif.Notification == "transmitted-data" {
 			return json.Unmarshal(notif.Data, dst)
 		}
+	}
+}
+
+func (sc *signalingClient) receiveDataCtx(ctx context.Context, dst any) error {
+	ch := make(chan error, 1)
+	go func() {
+		ch <- sc.receiveData(dst)
+	}()
+	select {
+	case err := <-ch:
+		return err
+	case <-ctx.Done():
+		sc.close()
+		<-ch
+		return ctx.Err()
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	gorillaWs "github.com/gorilla/websocket"
@@ -213,5 +214,168 @@ func TestSignalingClient_ExchangeData(t *testing.T) {
 	}
 	if creds.UFrag != "test" {
 		t.Errorf("ufrag = %q, want %q", creds.UFrag, "test")
+	}
+}
+
+func TestSignalingClient_ReceiveDataReturnsOnContextCancel(t *testing.T) {
+	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+
+		hello := signalingServerHello{}
+		hello.Conversation.Participants = []signalingParticipant{
+			{ID: 42, ExternalID: struct{ ID string `json:"id"` }{ID: "ext-42"}},
+		}
+		if err := ws.WriteJSON(hello); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	sc, err := newSignalingClient(ctx, wsURL, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+
+	if _, err := sc.receiveServerHello(); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		var creds iceCredentials
+		done <- sc.receiveDataCtx(ctx, &creds)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected receiveData to fail after context cancellation")
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("receiveData did not return after context cancellation")
+	}
+}
+
+func TestSignalingClient_ReceiveDataIgnoresCanceledSetupContextAfterHello(t *testing.T) {
+	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+
+		hello := signalingServerHello{}
+		hello.Conversation.Participants = []signalingParticipant{
+			{ID: 42, ExternalID: struct{ ID string `json:"id"` }{ID: "ext-42"}},
+		}
+		if err := ws.WriteJSON(hello); err != nil {
+			return
+		}
+		if err := ws.WriteJSON(map[string]any{
+			"type":         "notification",
+			"notification": "transmitted-data",
+			"data": map[string]any{
+				"ufrag":    "ok",
+				"password": "pass",
+			},
+		}); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	sc, err := newSignalingClient(ctx, wsURL, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+
+	if _, err := sc.receiveServerHello(); err != nil {
+		t.Fatal(err)
+	}
+
+	cancel()
+
+	var creds iceCredentials
+	err = sc.receiveData(&creds)
+	if err != nil {
+		t.Fatalf("receiveData failed after setup context cancel: %v", err)
+	}
+	if creds.UFrag != "ok" {
+		t.Fatalf("ufrag = %q, want %q", creds.UFrag, "ok")
+	}
+}
+
+func TestSignalingClient_ReceiveDataCtxSlowServer(t *testing.T) {
+	upgrader := gorillaWs.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+
+		hello := signalingServerHello{}
+		hello.Conversation.Participants = []signalingParticipant{
+			{ID: 42, ExternalID: struct{ ID string `json:"id"` }{ID: "ext-42"}},
+		}
+		if err := ws.WriteJSON(hello); err != nil {
+			return
+		}
+
+		// Simulate slow server — credentials arrive after 200ms
+		time.Sleep(200 * time.Millisecond)
+
+		if err := ws.WriteJSON(map[string]any{
+			"type":         "notification",
+			"notification": "transmitted-data",
+			"data": map[string]any{
+				"ufrag":    "slow-ok",
+				"password": "slow-pass",
+			},
+		}); err != nil {
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx := context.Background()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	sc, err := newSignalingClient(ctx, wsURL, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sc.close()
+
+	if _, err := sc.receiveServerHello(); err != nil {
+		t.Fatal(err)
+	}
+
+	var creds iceCredentials
+	err = sc.receiveDataCtx(ctx, &creds)
+	if err != nil {
+		t.Fatalf("receiveDataCtx failed on slow server: %v", err)
+	}
+	if creds.UFrag != "slow-ok" {
+		t.Fatalf("ufrag = %q, want %q", creds.UFrag, "slow-ok")
 	}
 }
