@@ -6,6 +6,27 @@ import (
 	"fmt"
 )
 
+// getOrCacheCallsLogin returns a cached calls API login response, or
+// performs getCallToken + anonymLogin on first call and caches the result.
+// This avoids ~500ms of HTTP round-trips on each WaitForCall, which is
+// critical because the signaling server has a very short join timeout.
+func (c *Client) getOrCacheCallsLogin(ctx context.Context) (*callsLoginResponse, error) {
+	if c.callsLoginCache != nil {
+		return c.callsLoginCache, nil
+	}
+	callToken, err := c.getCallToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	api := newCallsAPI(c.httpClient)
+	loginResp, err := api.login(ctx, callToken)
+	if err != nil {
+		return nil, err
+	}
+	c.callsLoginCache = loginResp
+	return loginResp, nil
+}
+
 // getCallToken requests a call token via opcode 158.
 func (c *Client) getCallToken(ctx context.Context) (string, error) {
 	resp, err := c.InvokeMethod(ctx, OpcodeCallToken, struct{}{})
