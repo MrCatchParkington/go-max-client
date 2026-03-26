@@ -77,18 +77,20 @@ func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bo
 // WaitForCall blocks until an incoming call arrives and establishes
 // the ICE connection. Returns a CallSession with a bidirectional data stream.
 func (c *Client) WaitForCall(ctx context.Context, forceRelay bool) (*CallSession, error) {
+	// Eagerly cache calls API login while waiting for incoming call.
+	// This avoids ~500ms of HTTP round-trips after the call arrives,
+	// which is critical because the signaling server has a short join timeout.
+	if _, err := c.getOrCacheCallsLogin(ctx); err != nil {
+		c.log.Warn("pre-cache calls login failed (will retry on call)", "err", err)
+	}
+
 	incoming, vcp, err := c.waitIncomingCall(ctx)
 	if err != nil {
 		return nil, err
 	}
 	c.log.Info("incoming call", "callerID", incoming.CallerID, "conversationID", incoming.ConversationID)
 
-	callToken, err := c.getCallToken(ctx)
-	if err != nil {
-		return nil, err
-	}
-	api := newCallsAPI(c.httpClient)
-	loginResp, err := api.login(ctx, callToken)
+	loginResp, err := c.getOrCacheCallsLogin(ctx)
 	if err != nil {
 		return nil, err
 	}

@@ -102,6 +102,9 @@ type Client struct {
 	// keepalive
 	keepaliveCancel context.CancelFunc
 
+	// calls API login cache (avoid HTTP round-trips on each WaitForCall)
+	callsLoginCache *callsLoginResponse
+
 	// QR auth state (between StartQRAuth and WaitQRAuth)
 	qrTrackID      string
 	qrPollInterval time.Duration
