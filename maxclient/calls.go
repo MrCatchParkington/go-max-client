@@ -35,16 +35,19 @@ func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bo
 	sigParsed.RawQuery = q.Encode()
 	sigURL := sigParsed.String()
 
+	c.log.Info("signaling: dialing", "host", sigParsed.Host)
 	sig, err := newSignalingClient(ctx, sigURL, c.log)
 	if err != nil {
 		return nil, err
 	}
+	c.log.Info("signaling: connected, awaiting server hello")
 
 	hello, err := sig.receiveServerHello()
 	if err != nil {
 		sig.close()
 		return nil, err
 	}
+	c.log.Info("signaling: server hello received", "participants", len(hello.Conversation.Participants))
 
 	calleeIDStr := strconv.FormatInt(calleeExternalID, 10)
 	peerID := int64(0)
@@ -59,6 +62,7 @@ func (c *Client) Call(ctx context.Context, calleeExternalID int64, forceRelay bo
 		return nil, fmt.Errorf("calls: peer not found in participants")
 	}
 
+	c.log.Info("ice: starting connect", "force_relay", forceRelay)
 	ic := newICEConnector(sig, peerID, c.log)
 	iceConn, agent, err := ic.connect(ctx, startResp, forceRelay, true)
 	if err != nil {
