@@ -393,3 +393,9 @@ func (c *Client) recvLoop(ctx context.Context) {
 		}
 	}
 }
+
+// OwnUserID returns the authenticated user's MAX ID.
+// Returns 0 if the user ID is not yet available.
+func (c *Client) OwnUserID() int64 {
+    return c.ownUserID
+}
